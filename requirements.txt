@@ -7,3 +7,5 @@ accelerate
 sentencepiece
 protobuf
 safetensors
+gradio
+
