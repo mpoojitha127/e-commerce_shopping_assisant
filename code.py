@@ -1,4 +1,9 @@
 import pandas as pd
+import gradio as gr
+import torch
+from transformers import ( AutoTokenizer,AutoModelForCausalLM,
+    Trainer,TrainingArguments,DataCollatorForLanguageModeling
+)
 
 data = {
     "Question": [
@@ -210,6 +215,7 @@ data = {
         "Use the AI shopping assistant or contact customer support."
     ]
 }
+
 df = pd.DataFrame(data)
 print(df)
 from datasets import load_dataset
@@ -217,46 +223,36 @@ df.to_json("train_data.json",orient="records",indent=4)
 dataset=load_dataset("json",data_files="train_data.json")
 print(dataset)
 def formatting(data):
-  return {
+  return{
       "text":f"""### Question:{data["Question"]}
-              ### Answer: {data["Answer"]}"""
+      ###Answer:{data["Answer"]}"""
   }
 dataset=dataset["train"].map(formatting)
 print(dataset)
-tokenizer=AutoTokenizer.from_pretrained(model_name)
-tokenizer.pad_token=tokenizer.eos_token
-def tokenize(prompt):
-  result=tokenizer(prompt["text"],
-                   padding="max_length",
-                   truncation=True,
-                   max_length=128)
-  result["labels"]=result["input_ids"].copy()
-  return result
-dataset=dataset.map(tokenize)
-print(dataset)
-import torch
-from transformers import ( AutoTokenizer,AutoModelForCausalLM,
-    Trainer,TrainingArguments,DataCollatorForLanguageModeling
-)
-
-
 model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-
-
 model = AutoModelForCausalLM.from_pretrained(
     model_name
 )
-from peft import(LoraConfig,get_peft_model)
+from peft import (LoraConfig,get_peft_model)
 config=LoraConfig(r=8,lora_alpha=16,
                   target_modules=["q_proj","v_proj"],
                   lora_dropout=0.1,bias="none",task_type="CAUSAL_LM")
 model=get_peft_model(model,config)
 model.print_trainable_parameters()
+tokenizer=AutoTokenizer.from_pretrained(model_name)
+tokenizer.pad_token=tokenizer.eos_token
+def tokenize(prompt):
+  result=tokenizer(prompt["text"],padding="max_length",truncation=True,max_length=128)
+  result["labels"]=result["input_ids"].copy()
+  return result
+dataset=dataset.map(tokenize)
+print(dataset)
+
 data_collator=DataCollatorForLanguageModeling(
     tokenizer=tokenizer,mlm=False
 )
 training_args=TrainingArguments(
-    output_dir="./outputs",
+    output_dir="./putputs",
     num_train_epochs=5,
     per_device_train_batch_size=1,
     learning_rate=2e-4,
@@ -273,15 +269,45 @@ trainer=Trainer(
 trainer.train()
 model.save_pretrained("tinyllama_adapter")
 tokenizer.save_pretrained("tinyllama_adapter")
-device=next(model.parameters()).device
-prompt="""### Question:
-COD is available for eligible products and locations?
+device = next(model.parameters()).device
 
+def chatbot(question):
+
+    prompt = f"""### Question:
+{question}
 
 ### Answer:
 """
-inputs=tokenizer(prompt,return_tensors="pt")
-inputs={k: v.to(device) for k,v in inputs.items()}
-with torch.no_grad():
-  output=model.generate(**inputs,max_new_tokens=100)
-print(tokenizer.decode(output[0],skip_special_tokens=True))
+
+    inputs = tokenizer(prompt, return_tensors="pt")
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    with torch.no_grad():
+        output = model.generate(
+            **inputs,
+            max_new_tokens=100
+        )
+
+    answer = tokenizer.decode(
+        output[0],
+        skip_special_tokens=True
+    )
+
+    if "### Answer:" in answer:
+        answer = answer.split("### Answer:")[-1].strip()
+
+    return answer
+
+
+demo = gr.Interface(
+    fn=chatbot,
+    inputs=gr.Textbox(
+        label="Ask a Question"
+    ),
+    outputs=gr.Textbox(
+        label="Answer"
+    ),
+    title="E-Commerce AI Assistant"
+)
+
+demo.launch()
